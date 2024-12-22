@@ -1,19 +1,24 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, Canvas
 import sqlite3
 from datetime import datetime
-import datetime
+# import datetime
 import re 
 from PIL import Image, ImageTk
 from tkcalendar import DateEntry  # Import DateEntry from tkcalendar
+from tkcalendar import Calendar
+from datetime import datetime, date
+
 
 class DrivingSchoolApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Pass IT Driving School Management System")
         self.root.geometry("1200x700")
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True)
 
-          # Show loading screen first
+            # Show loading screen first
         self.loading = show_loading_screen(root)
         self.root.after(1600, self.initialize_app)
 
@@ -30,13 +35,11 @@ class DrivingSchoolApp:
         self.create_database()
 
         # Create Notebook (Tabbed Interface)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(expand=True, fill='both')
-
-        # Create Tabs
+            # Create Tabs
         self.create_student_tab()
         self.create_instructor_tab()
         self.create_lesson_tab()
+        self.create_timetable_tab()
 
       
     def create_database(self):
@@ -85,9 +88,136 @@ class DrivingSchoolApp:
         ''')
         self.conn.commit()
 
+    def create_timetable_tab(self):
+        # Create the tab
+        self.timetable_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.timetable_tab, text='Time Tables')
 
-# student section---------
+        # Colors for styling
+        colors = {
+            'background': '#f4f6f9',
+            'card_bg': '#ffffff',
+            'primary': '#3498db',
+            'text_dark': '#2c3e50',
+            'text_light': '#7f8c8d',
+            'border': '#e1e8ed'
+        }
 
+        # Create main container frames
+        left_frame = ttk.Frame(self.timetable_tab, width=200)
+        left_frame.pack(side='left', fill='y', padx=5)
+
+        right_frame = ttk.Frame(self.timetable_tab)
+        right_frame.pack(side='left', fill='both', expand=True, padx=5)
+
+        # Add title at the top
+        title_label = ttk.Label(left_frame, text="Lesson Schedule", font=('Helvetica', 14, 'bold'))
+        title_label.pack(pady=10)
+
+        # Create calendar in left frame with correct datetime
+        current_date = datetime.now()
+        self.cal = Calendar(
+            left_frame, selectmode='day',
+            year=current_date.year,
+            month=current_date.month,
+            day=current_date.day,
+            date_pattern='yyyy-mm-dd'
+        )
+        self.cal.pack(padx=10, pady=5)
+
+        # Create lessons list title
+        self.lessons_title = ttk.Label(right_frame, text="Today's Lessons", font=('Helvetica', 12, 'bold'))
+        self.lessons_title.pack(pady=10)
+
+        # Create scrollable frame for lesson cards
+        container = ttk.Frame(right_frame)
+        container.pack(fill='both', expand=True)
+
+        # Create canvas with scrollbar
+        self.canvas = Canvas(container, bg=colors['background'])
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
+
+        self.scrollable_frame = ttk.Frame(self.canvas, style="ScrollableFrame.TFrame")
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack scrolling components
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        # Bind calendar selection to update lessons
+        self.cal.bind("<<CalendarSelected>>", self.update_lessons)
+
+        # Initial load of lessons
+        self.update_lessons()
+
+    def create_lesson_card(self, lesson_data):
+        # Create card frame
+        card = ttk.Frame(self.scrollable_frame, style="Card.TFrame", padding=10)
+        card.pack(fill='x', padx=10, pady=5)
+
+        # Add border and background color
+        card.configure(relief="solid", borderwidth=1)
+
+        try:
+            # Fetch related data
+            self.cursor.execute("SELECT first_name || ' ' || last_name FROM students WHERE id = ?", (lesson_data['student_id'],))
+            student_name = self.cursor.fetchone()[0]
+
+            self.cursor.execute("SELECT first_name || ' ' || last_name FROM instructors WHERE id = ?", (lesson_data['instructor_id'],))
+            instructor_name = self.cursor.fetchone()[0]
+
+            # Add details to card
+            ttk.Label(card, text=f"Lesson Type: {lesson_data['lesson_type']}", font=('Helvetica', 14, 'bold')).grid(row=0, column=0, sticky='w')
+            ttk.Label(card, text=f"Status: {lesson_data['status']}", font=('Helvetica', 12)).grid(row=0, column=1, sticky='e')
+            ttk.Label(card, text=f"Student: {student_name}", font=('Helvetica', 12)).grid(row=1, column=0, sticky='w')
+            ttk.Label(card, text=f"Instructor: {instructor_name}", font=('Helvetica', 12)).grid(row=1, column=1, sticky='e')
+            ttk.Label(card, text=f"Duration: {lesson_data['duration']} hours", font=('Helvetica', 12)).grid(row=2, column=0, sticky='w')
+            ttk.Label(card, text=f"Fee: £{lesson_data['fee']:.2f}", font=('Helvetica', 12)).grid(row=2, column=1, sticky='e')
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
+
+    def update_lessons(self, event=None):
+        # Clear previous lessons
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        selected_date = self.cal.get_date()
+        self.lessons_title.config(text=f"Lessons for {selected_date}")
+
+        try:
+            # Fetch lessons from the database
+            self.cursor.execute("SELECT * FROM lessons WHERE date(lesson_date) = date(?) ORDER BY lesson_type", (selected_date,))
+            lessons = self.cursor.fetchall()
+
+            if not lessons:
+                ttk.Label(self.scrollable_frame, text="No lessons scheduled for this date", font=('Helvetica', 10, 'italic')).pack(pady=20)
+            else:
+                for lesson in lessons:
+                    lesson_dict = {
+                        'id': lesson[0],
+                        'student_id': lesson[1],
+                        'instructor_id': lesson[2],
+                        'lesson_type': lesson[3],
+                        'lesson_date': lesson[4],
+                        'duration': lesson[5],
+                        'status': lesson[6],
+                        'fee': lesson[7]
+                    }
+                    self.create_lesson_card(lesson_dict)
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
+
+
+
+# student---------------------
     def create_student_tab(self):
             # Student Management Tab
             student_tab = ttk.Frame(self.notebook, style='Student.TFrame')
@@ -1024,9 +1154,10 @@ class DrivingSchoolApp:
         self.instructor_select.set("")
         self.lesson_type.set("")
         self.pay_rate_label.config(text="0")
-        self.lesson_date.set_date(datetime.date.today())  # Reset to today's date
+        self.lesson_date.set_date(date.today())  # Reset to today's date
         self.lesson_duration.delete(0, tk.END)
         self.total_fee_label.config(text="0")
+
 
     def show_error(self, message):
         messagebox.showerror("Error", message)
@@ -1086,24 +1217,24 @@ class DrivingSchoolApp:
         
         # Update UI: Clear form fields and refresh the lessons view
 
-    def clear_lesson_form(self):
-        # Clear the student selection
-        self.student_select.set('')
+    # def clear_lesson_form(self):
+    #     # Clear the student selection
+    #     self.student_select.set('')
 
-        # Clear the instructor selection
-        self.instructor_select.set('')
+    #     # Clear the instructor selection
+    #     self.instructor_select.set('')
 
-        # Clear the lesson type selection
-        self.lesson_type.set('')
+    #     # Clear the lesson type selection
+    #     self.lesson_type.set('')
 
-        # Clear the date picker
-        self.lesson_date.set_date('')  # Reset to empty or current date
+    #     # Clear the date picker
+    #     self.lesson_date.set_date('')  # Reset to empty or current date
 
-        # Clear the lesson duration entry
-        self.lesson_duration.delete(0, tk.END)
+    #     # Clear the lesson duration entry
+    #     self.lesson_duration.delete(0, tk.END)
 
-        # Clear the total fee display
-        self.pay_rate_label.config(text="0")  # Reset to default
+    #     # Clear the total fee display
+    #     self.pay_rate_label.config(text="0")  # Reset to default
 
     def update_pay_rate(self, event):
         lesson_type = self.lesson_type.get()
@@ -1268,4 +1399,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+

@@ -1,19 +1,24 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox, Canvas
 import sqlite3
 from datetime import datetime
-import datetime
+# import datetime
 import re 
 from PIL import Image, ImageTk
 from tkcalendar import DateEntry  # Import DateEntry from tkcalendar
+from tkcalendar import Calendar
+from datetime import datetime, date
+
 
 class DrivingSchoolApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Pass IT Driving School Management System")
         self.root.geometry("1200x700")
+        self.notebook = ttk.Notebook(root)
+        self.notebook.pack(fill="both", expand=True)
 
-          # Show loading screen first
+            # Show loading screen first
         self.loading = show_loading_screen(root)
         self.root.after(1600, self.initialize_app)
 
@@ -30,13 +35,11 @@ class DrivingSchoolApp:
         self.create_database()
 
         # Create Notebook (Tabbed Interface)
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(expand=True, fill='both')
-
-        # Create Tabs
+            # Create Tabs
         self.create_student_tab()
         self.create_instructor_tab()
         self.create_lesson_tab()
+        self.create_timetable_tab()
 
       
     def create_database(self):
@@ -85,9 +88,135 @@ class DrivingSchoolApp:
         ''')
         self.conn.commit()
 
+    def create_timetable_tab(self):
+        # Create the tab
+        self.timetable_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.timetable_tab, text='Time Tables')
 
-# student section---------
+        # Colors for styling
+        colors = {
+            'background': '#f4f6f9',
+            'card_bg': '#ffffff',
+            'primary': '#3498db',
+            'text_dark': '#2c3e50',
+            'text_light': '#7f8c8d',
+            'border': '#e1e8ed'
+        }
 
+        # Create main container frames
+        left_frame = ttk.Frame(self.timetable_tab, width=200)
+        left_frame.pack(side='left', fill='y', padx=5)
+
+        right_frame = ttk.Frame(self.timetable_tab)
+        right_frame.pack(side='left', fill='both', expand=True, padx=5)
+
+        # Add title at the top
+        title_label = ttk.Label(left_frame, text="Lesson Schedule", font=('Helvetica', 14, 'bold'))
+        title_label.pack(pady=10)
+
+        # Create calendar in left frame with correct datetime
+        current_date = datetime.now()
+        self.cal = Calendar(
+            left_frame, selectmode='day',
+            year=current_date.year,
+            month=current_date.month,
+            day=current_date.day,
+            date_pattern='yyyy-mm-dd'
+        )
+        self.cal.pack(padx=10, pady=5)
+
+        # Create lessons list title
+        self.lessons_title = ttk.Label(right_frame, text="Today's Lessons", font=('Helvetica', 12, 'bold'))
+        self.lessons_title.pack(pady=10)
+
+        # Create scrollable frame for lesson cards
+        container = ttk.Frame(right_frame)
+        container.pack(fill='both', expand=True)
+
+        # Create canvas with scrollbar
+        self.canvas = Canvas(container, bg=colors['background'])
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
+
+        self.scrollable_frame = ttk.Frame(self.canvas, style="ScrollableFrame.TFrame")
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack scrolling components
+        scrollbar.pack(side="right", fill="y")
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        # Bind calendar selection to update lessons
+        self.cal.bind("<<CalendarSelected>>", self.update_lessons)
+
+        # Initial load of lessons
+        self.update_lessons()
+
+    def create_lesson_card(self, lesson_data):
+        # Create card frame
+        card = ttk.Frame(self.scrollable_frame, style="Card.TFrame", padding=10)
+        card.pack(fill='x', padx=10, pady=5)
+
+        # Add border and background color
+        card.configure(relief="solid", borderwidth=1)
+
+        try:
+            # Fetch related data
+            self.cursor.execute("SELECT first_name || ' ' || last_name FROM students WHERE id = ?", (lesson_data['student_id'],))
+            student_name = self.cursor.fetchone()[0]
+
+            self.cursor.execute("SELECT first_name || ' ' || last_name FROM instructors WHERE id = ?", (lesson_data['instructor_id'],))
+            instructor_name = self.cursor.fetchone()[0]
+
+            # Add details to card
+            ttk.Label(card, text=f"Lesson Type: {lesson_data['lesson_type']}", font=('Helvetica', 14, 'bold')).grid(row=0, column=0, sticky='w')
+            ttk.Label(card, text=f"Status: {lesson_data['status']}", font=('Helvetica', 12)).grid(row=0, column=1, sticky='e')
+            ttk.Label(card, text=f"Student: {student_name}", font=('Helvetica', 12)).grid(row=1, column=0, sticky='w')
+            ttk.Label(card, text=f"Instructor: {instructor_name}", font=('Helvetica', 12)).grid(row=1, column=1, sticky='e')
+            ttk.Label(card, text=f"Duration: {lesson_data['duration']} hours", font=('Helvetica', 12)).grid(row=2, column=0, sticky='w')
+            ttk.Label(card, text=f"Fee: £{lesson_data['fee']:.2f}", font=('Helvetica', 12)).grid(row=2, column=1, sticky='e')
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
+
+    def update_lessons(self, event=None):
+        # Clear previous lessons
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        selected_date = self.cal.get_date()
+        self.lessons_title.config(text=f"Lessons for {selected_date}")
+
+        try:
+            # Fetch lessons from the database
+            self.cursor.execute("SELECT * FROM lessons WHERE date(lesson_date) = date(?) ORDER BY lesson_type", (selected_date,))
+            lessons = self.cursor.fetchall()
+
+            if not lessons:
+                ttk.Label(self.scrollable_frame, text="No lessons scheduled for this date", font=('Helvetica', 10, 'italic')).pack(pady=20)
+            else:
+                for lesson in lessons:
+                    lesson_dict = {
+                        'id': lesson[0],
+                        'student_id': lesson[1],
+                        'instructor_id': lesson[2],
+                        'lesson_type': lesson[3],
+                        'lesson_date': lesson[4],
+                        'duration': lesson[5],
+                        'status': lesson[6],
+                        'fee': lesson[7]
+                    }
+                    self.create_lesson_card(lesson_dict)
+
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error accessing database: {str(e)}")
+
+
+# student---------------------
     def create_student_tab(self):
             # Student Management Tab
             student_tab = ttk.Frame(self.notebook, style='Student.TFrame')
@@ -300,7 +429,6 @@ class DrivingSchoolApp:
             # Populate initial data
             self.view_students()
 
- 
     def search_students(self):
         search_term = self.student_search_entry.get().strip().lower()
         
@@ -330,6 +458,7 @@ class DrivingSchoolApp:
         finally:
             conn.close()
 
+
     def add_student(self):
         first_name = self.student_first_name.get().strip()
         last_name = self.student_last_name.get().strip()
@@ -345,7 +474,7 @@ class DrivingSchoolApp:
         if not phone.isdigit():
             messagebox.showwarning("Invalid Input", "Phone number must contain only digits")
             return
-            
+                
         if len(phone) != 11:
             messagebox.showwarning("Invalid Input", "Phone number must be exactly 11 digits")
             return
@@ -379,8 +508,11 @@ class DrivingSchoolApp:
             self.student_email.delete(0, tk.END)
             self.student_phone.delete(0, tk.END)
             
-            self.view_students()
             messagebox.showinfo("Success", "Student added successfully")
+            self.view_students()
+            
+            # Refresh the student dropdown in the lesson tab
+            self.populate_student_dropdown()
             
         except sqlite3.Error as e:
             messagebox.showerror("Database Error", f"An error occurred: {str(e)}")
@@ -389,8 +521,6 @@ class DrivingSchoolApp:
 
     # Add this method to validate phone number input in real-time
     def validate_phone_input(self, P):
-        # P is the proposed value for the entry
-        # Return True to allow the change, False to reject it
         
         # Allow empty value (for backspace/delete)
         if P == "":
@@ -401,6 +531,7 @@ class DrivingSchoolApp:
             return True
             
         return False
+
 
     def initialize_student_database(self):
         try:
@@ -492,12 +623,23 @@ class DrivingSchoolApp:
 
 
     def populate_student_dropdown(self):
-        # Populate student dropdown
-        self.cursor.execute('SELECT id, CONCAT(first_name, " ", last_name) as full_name FROM students')
-        students = self.cursor.fetchall()
-        self.student_select['values'] = [f"{s[1]}" for s in students]  # Display only full names for selection
-
-
+        """Populate the student dropdown with the latest data from the database."""
+        try:
+            # Clear existing values
+            self.student_select['values'] = []
+            
+            # Fetch all students and format their names
+            self.cursor.execute('SELECT first_name, last_name FROM students ORDER BY first_name, last_name')
+            students = self.cursor.fetchall()
+            
+            # Format names as "First Last"
+            student_names = [f"{first} {last}" for first, last in students]
+            
+            # Update dropdown values
+            self.student_select['values'] = student_names
+            
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error populating student dropdown: {str(e)}")
 # Instructor section--------
 
     def create_instructor_tab(self):
@@ -868,8 +1010,6 @@ class DrivingSchoolApp:
 
 
 # lesson  section------------
-
-
     def create_lesson_tab(self):
         # Lesson Management Tab
         lesson_tab = ttk.Frame(self.notebook, style='Lesson.TFrame')
@@ -1024,92 +1164,13 @@ class DrivingSchoolApp:
         self.instructor_select.set("")
         self.lesson_type.set("")
         self.pay_rate_label.config(text="0")
-        self.lesson_date.set_date(datetime.date.today())  # Reset to today's date
+        self.lesson_date.set_date(date.today())  # Reset to today's date
         self.lesson_duration.delete(0, tk.END)
         self.total_fee_label.config(text="0")
 
+
     def show_error(self, message):
         messagebox.showerror("Error", message)
-
-    def book_lesson(self):
-        # Get values from the form
-        student_name = self.student_select.get()
-        instructor_name = self.instructor_select.get()
-        lesson_type = self.lesson_type.get()
-        lesson_date = self.lesson_date.get_date()  # Assuming DateEntry returns a datetime object
-        duration = int(self.lesson_duration.get())
-        status = 'Booked'
-        
-        # Get the pay rate as a float
-        pay_rate_text = self.pay_rate_label.cget("text")
-        
-        # Remove currency symbol if present
-        if '£' in pay_rate_text:
-            pay_rate_text = pay_rate_text.replace('£', '')
-        
-        # Convert to float
-        try:
-            fee = float(pay_rate_text)
-        except ValueError:
-            self.show_error("Invalid fee format")  # Display error if conversion fails
-            return
-
-        # Fetch IDs for student and instructor based on names
-        self.cursor.execute("SELECT id FROM students WHERE CONCAT(first_name, ' ', last_name) = ?", (student_name,))
-        student_record = self.cursor.fetchone()
-        
-        if student_record is None:
-            self.show_error(f"Student '{student_name}' not found.")  # Show error if student is not found
-            return
-        student_id = student_record[0]
-
-        self.cursor.execute("SELECT id FROM instructors WHERE CONCAT(first_name, ' ', last_name) = ?", (instructor_name,))
-        instructor_record = self.cursor.fetchone()
-        
-        if instructor_record is None:
-            self.show_error(f"Instructor '{instructor_name}' not found.")  # Show error if instructor is not found
-            return
-        instructor_id = instructor_record[0]
-
-        # Insert into the lessons table
-        self.cursor.execute('''
-            INSERT INTO lessons (student_id, instructor_id, lesson_type, lesson_date, duration, status, fee)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (student_id, instructor_id, lesson_type, lesson_date, duration, status, fee))
-
-        # Commit the changes
-        self.conn.commit()
-        self.reset_lesson_form()
-        messagebox.showinfo("Success", "Lesson Booked ")
-        self.view_lessons()       # Refresh the lessons view
-        # self.clear_lesson_form()  # Clear form fields
-        
-        # Update UI: Clear form fields and refresh the lessons view
-
-    def clear_lesson_form(self):
-        # Clear the student selection
-        self.student_select.set('')
-
-        # Clear the instructor selection
-        self.instructor_select.set('')
-
-        # Clear the lesson type selection
-        self.lesson_type.set('')
-
-        # Clear the date picker
-        self.lesson_date.set_date('')  # Reset to empty or current date
-
-        # Clear the lesson duration entry
-        self.lesson_duration.delete(0, tk.END)
-
-        # Clear the total fee display
-        self.pay_rate_label.config(text="0")  # Reset to default
-
-    def update_pay_rate(self, event):
-        lesson_type = self.lesson_type.get()
-        pay_rate = self.pay_rate_map.get(lesson_type, 0)  # Fetch pay rate for the lesson type
-        self.pay_rate_label.config(text=f"£{pay_rate}")  # Update pay rate display
-        self.calculate_total_fee()  # Recalculate fee in case duration is already entered
 
     def calculate_total_fee(self, event=None):
         lesson_type = self.lesson_type.get()
@@ -1119,8 +1180,68 @@ class DrivingSchoolApp:
             pay_rate = self.pay_rate_map.get(lesson_type, 0)
             total_fee = pay_rate * int(duration)
             self.total_fee_label.config(text=f"£{total_fee}")
+            return total_fee  # Return the calculated total fee
         else:
-            self.total_fee_label.config(text="0")  # Reset if input is invalid
+            self.total_fee_label.config(text="0")
+            return 0
+
+    def book_lesson(self):
+        # Get values from the form
+        student_name = self.student_select.get()
+        instructor_name = self.instructor_select.get()
+        lesson_type = self.lesson_type.get()
+        lesson_date = self.lesson_date.get_date()
+        
+        try:
+            duration = int(self.lesson_duration.get())
+        except ValueError:
+            self.show_error("Please enter a valid duration")
+            return
+            
+        status = 'Booked'
+        
+        # Calculate total fee
+        total_fee = self.calculate_total_fee()  # Get the actual total fee
+        
+        if total_fee == 0:
+            self.show_error("Invalid fee calculation")
+            return
+
+        # Fetch IDs for student and instructor based on names
+        self.cursor.execute("SELECT id FROM students WHERE first_name || ' ' || last_name = ?", (student_name,))
+        student_record = self.cursor.fetchone()
+        
+        if student_record is None:
+            self.show_error(f"Student '{student_name}' not found.")
+            return
+        student_id = student_record[0]
+
+        self.cursor.execute("SELECT id FROM instructors WHERE first_name || ' ' || last_name = ?", (instructor_name,))
+        instructor_record = self.cursor.fetchone()
+        
+        if instructor_record is None:
+            self.show_error(f"Instructor '{instructor_name}' not found.")
+            return
+        instructor_id = instructor_record[0]
+
+        # Insert into the lessons table with the total fee
+        self.cursor.execute('''
+            INSERT INTO lessons (student_id, instructor_id, lesson_type, lesson_date, duration, status, fee)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (student_id, instructor_id, lesson_type, lesson_date, duration, status, total_fee))  # Use total_fee here
+
+        # Commit the changes
+        self.conn.commit()
+        self.reset_lesson_form()
+        messagebox.showinfo("Success", "Lesson Booked")
+        self.view_lessons()
+
+    def update_pay_rate(self, event):
+        lesson_type = self.lesson_type.get()
+        pay_rate = self.pay_rate_map.get(lesson_type, 0)  # Fetch pay rate for the lesson type
+        self.pay_rate_label.config(text=f"£{pay_rate}")  # Update pay rate display
+        self.calculate_total_fee()  # Recalculate fee in case duration is already entered
+
 
     def view_lessons(self):
         # Clear existing items
@@ -1268,4 +1389,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+
