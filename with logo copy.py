@@ -3,11 +3,8 @@ import re
 import sqlite3
 import PIL.Image
 from tkinter import ttk, messagebox, Canvas
-from datetime import datetime
-# import datetime
 from PIL import Image, ImageTk
-from tkcalendar import DateEntry  # Import DateEntry from tkcalendar
-from tkcalendar import Calendar
+from tkcalendar import DateEntry,Calendar  # Import DateEntry from tkcalendar
 from datetime import datetime, date
 from PIL import Image, ImageTk
 
@@ -16,12 +13,11 @@ class DrivingSchoolApp:
         self.root = root
         self.root.title("Pass IT Driving School Management System")
         self.root.geometry("1200x700")
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing) 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="both", expand=True)
 
-        #     # Show loading screen first
-        # self.loading = show_loading_screen(root)
-        # self.root.after(1600, self.initialize_app)
+
 
         try:
             icon = PIL.Image.open("logo.png")  # Make sure to have logo.png in your project directory
@@ -78,6 +74,10 @@ class DrivingSchoolApp:
             'Driving Test': 75   # £75 per hour
         }
 
+    def on_closing(self):
+        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+            self.root.destroy()
+
 
     def initialize_app(self):
         # Database Setup
@@ -90,7 +90,6 @@ class DrivingSchoolApp:
         self.create_lesson_tab()
         self.create_timetable_tab()
 
-      
     def create_database(self):
         # Create SQLite database and tables
         self.conn = sqlite3.connect('driving_school.db')
@@ -481,6 +480,7 @@ class DrivingSchoolApp:
     def search_students(self):
         search_term = self.student_search_entry.get().strip().lower()
         
+        # Clear the treeview
         for item in self.student_tree.get_children():
             self.student_tree.delete(item)
         
@@ -488,24 +488,37 @@ class DrivingSchoolApp:
             conn = sqlite3.connect('driving_school.db')
             cursor = conn.cursor()
             
+            # Execute the query
             cursor.execute("""
                 SELECT * FROM students 
                 WHERE LOWER(first_name) LIKE ? OR 
                     LOWER(last_name) LIKE ? OR 
-                    LOWER(email) LIKE ? OR
+                    LOWER(email) LIKE ? OR 
                     LOWER(phone) LIKE ?
             """, (f'%{search_term}%', f'%{search_term}%', f'%{search_term}%', f'%{search_term}%'))
             
             students = cursor.fetchall()
-            for student in students:
-                self.student_tree.insert("", "end", values=student)
-                
+
+
+            if students:
+                # Populate the treeview with results
+                for student in students:
+                    self.student_tree.insert("", "end", values=student)
+            else:
+                # If no results are found
+                self.student_tree.insert("", "end", values=("No results found", "", "", ""), tags=("placeholder",))
+            
+            self.student_tree.tag_configure("placeholder", foreground="red", font=("Arial", 12, "italic"))
+            
+               # Update the student count label
+
             self.student_count_label.config(text=f"Total Students: {len(students)}")
             
         except sqlite3.Error as e:
             messagebox.showerror("Database Error", f"An error occurred: {str(e)}")
         finally:
             conn.close()
+
 
 
     def add_student(self):
@@ -526,6 +539,12 @@ class DrivingSchoolApp:
                 
         if len(phone) != 11:
             messagebox.showwarning("Invalid Input", "Phone number must be exactly 11 digits")
+            return
+
+
+        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(email_pattern, email):
+            messagebox.showwarning("Invalid Input", "Please enter a valid email address")
             return
         
         try:
@@ -636,40 +655,37 @@ class DrivingSchoolApp:
 
   
     def delete_student(self):
-        # Get selected item
         selected_item = self.student_tree.selection()
         
         if not selected_item:
             messagebox.showwarning("Selection Error", "Please select a student to delete")
             return
         
-        # Confirm deletion
-        if not messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this student?"):
-            return
-        
         try:
-            # Connect to database
             conn = sqlite3.connect('driving_school.db')
             cursor = conn.cursor()
             
-            # Get student ID from selected item
             student_values = self.student_tree.item(selected_item)['values']
-            student_id = student_values[0]  # Assuming ID is the first column
+            student_id = student_values[0]
             
-            # Delete student
-            cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
-            conn.commit()
+            # Check if student has booked lessons
+            cursor.execute("SELECT COUNT(*) FROM lessons WHERE student_id = ?", (student_id,))
+            lesson_count = cursor.fetchone()[0]
             
-            # Refresh view
-            self.view_students()
+            if lesson_count > 0:
+                messagebox.showerror("Deletion Error", "Cannot delete student with booked lessons")
+                return
             
-            messagebox.showinfo("Success", "Student deleted successfully")
-            
+            if messagebox.askyesno("Confirm Delete", "Are you sure you want to delete this student?"):
+                cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
+                conn.commit()
+                self.view_students()
+                messagebox.showinfo("Success", "Student deleted successfully")
+                
         except sqlite3.Error as e:
             messagebox.showerror("Database Error", f"An error occurred: {str(e)}")
         finally:
             conn.close()
-
 
     def populate_student_dropdown(self):
         """Populate the student dropdown with the latest data from the database."""
@@ -911,20 +927,20 @@ class DrivingSchoolApp:
         # Retrieve input values
         first_name = self.instructor_first_name.get().strip()
         last_name = self.instructor_last_name.get().strip()
-        license_number = self.instructor_license.get().strip()
+        license = self.instructor_license.get().strip()
 
         # Validation checks
         if not first_name or not last_name:
             messagebox.showerror("Input Error", "First Name and Last Name cannot be empty.")
             return
 
-        if not license_number:
+        if not license:
             messagebox.showerror("Input Error", "License Number cannot be empty.")
             return
 
         # License Number Validation: Alphanumeric mix
         license_regex = r'^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]+$'
-        if not re.match(license_regex, license_number):
+        if not re.match(license_regex, license):
             messagebox.showerror("Input Error", "License Number must contain both letters and numbers.")
             return
 
@@ -934,8 +950,8 @@ class DrivingSchoolApp:
             # Using UPPER() function in SQLite for case-insensitive comparison
             self.cursor.execute('''
                 SELECT COUNT(*) FROM instructors 
-                WHERE UPPER(license_number) = UPPER(?)
-            ''', (license_number,))
+                WHERE UPPER(license) = UPPER(?)
+            ''', (license,))
             
             if self.cursor.fetchone()[0] > 0:
                 messagebox.showerror("Error", 
@@ -946,9 +962,9 @@ class DrivingSchoolApp:
             # Store the license number in its original case
             self.cursor.execute('''
                 INSERT INTO instructors 
-                (first_name, last_name, license_number) 
+                (first_name, last_name, license) 
                 VALUES (?, ?, ?)
-            ''', (first_name, last_name, license_number))
+            ''', (first_name, last_name, license))
             
             self.conn.commit()
             
@@ -1009,7 +1025,7 @@ class DrivingSchoolApp:
             self.instructor_tree.delete(row)
 
         # Fetch data from the database
-        select_query = 'SELECT id, first_name, last_name, license_number FROM instructors'
+        select_query = 'SELECT id, first_name, last_name, license FROM instructors'
         self.cursor.execute(select_query)
         rows = self.cursor.fetchall()
 
@@ -1031,11 +1047,11 @@ class DrivingSchoolApp:
 
         # Perform a case-insensitive search in the database
         query = """
-            SELECT id, first_name, last_name, license_number 
+            SELECT id, first_name, last_name, license
             FROM instructors 
             WHERE UPPER(first_name) LIKE UPPER(?) OR 
                 UPPER(last_name) LIKE UPPER(?) OR 
-                UPPER(license_number) LIKE UPPER(?)
+                UPPER(license) LIKE UPPER(?)
         """
         self.cursor.execute(query, (f"%{search_query}%", f"%{search_query}%", f"%{search_query}%"))
         results = self.cursor.fetchall()
@@ -1060,75 +1076,45 @@ class DrivingSchoolApp:
 
 # lesson  section------------
     def create_lesson_tab(self):
-        # Lesson Management Tab
         lesson_tab = ttk.Frame(self.notebook, style='Lesson.TFrame')
         self.notebook.add(lesson_tab, text="Lessons")
 
-        # Configure custom styles
         style = ttk.Style()
-        
-        # Color Palette (Modern, Professional)
         colors = {
-            'background': '#f4f6f9',      # Soft light blue-gray
-            'primary': '#3498db',         # Bright blue
-            'secondary': '#2ecc71',       # Green for positive actions
-            'accent': '#e74c3c',          # Red for destructive actions
-            'text_dark': '#2c3e50',       # Dark slate blue for text
-            'text_light': '#34495e',      # Slightly lighter dark blue
-            'input_bg': '#ffffff',        # Clean white for inputs
-            'border': '#bdc3c7'           # Light gray border
+            'background': '#f4f6f9',
+            'primary': '#3498db',
+            'secondary': '#2ecc71',
+            'accent': '#e74c3c',
+            'text_dark': '#2c3e50',
+            'text_light': '#34495e',
+            'input_bg': '#ffffff',
+            'border': '#bdc3c7'
         }
         
-        # Custom Styles
         style.configure('Lesson.TFrame', background=colors['background'])
-        style.configure('TLabel', 
-            background=colors['background'], 
-            foreground=colors['text_dark'], 
-            font=('Segoe UI', 10))
+        style.configure('TLabel', background=colors['background'], foreground=colors['text_dark'], font=('Segoe UI', 10))
         
-        # Main Frame with soft background
         main_frame = tk.Frame(lesson_tab, bg=colors['background'], bd=0)
         main_frame.pack(expand=True, fill="both", padx=20, pady=20)
 
-        # Title with modern typography
-        title_label = tk.Label(
-            main_frame, 
-            text="Lesson Management", 
-            font=('Segoe UI', 18, 'bold'), 
-            bg=colors['background'], 
-            fg=colors['text_dark']
-        )
+        title_label = tk.Label(main_frame, text="Lesson Management", font=('Segoe UI', 18, 'bold'), bg=colors['background'], fg=colors['text_dark'])
         title_label.pack(pady=(0, 20), anchor='center')
 
-        # Input Section with card-like design
-        input_frame = tk.Frame(
-            main_frame, 
-            bg='white', 
-            bd=1, 
-            relief='solid', 
-            highlightbackground=colors['border'], 
-            highlightthickness=1
-        )
+        input_frame = tk.Frame(main_frame, bg='white', bd=1, relief='solid', highlightbackground=colors['border'], highlightthickness=1)
         input_frame.pack(pady=(10,5), ipadx=10, ipady=10, fill='x')
 
-        # Initialize widgets first
+        # Initialize widgets
         self.student_select = ttk.Combobox(input_frame, font=('Segoe UI', 12), width=25)
         self.instructor_select = ttk.Combobox(input_frame, font=('Segoe UI', 12), width=25)
-        self.lesson_type = ttk.Combobox(input_frame, font=('Segoe UI', 12), width=25,
-                                    values=['Introductory', 'Standard', 'Pass Plus', 'Driving Test'])
-        self.pay_rate_label = tk.Label(input_frame, text="0", font=('Segoe UI', 12),
-                                    bg=colors['input_bg'], fg=colors['text_dark'])
-        self.lesson_date = DateEntry(input_frame, font=('Segoe UI', 12), width=25,
-                                    date_pattern='yyyy-mm-dd')
+        self.lesson_type = ttk.Combobox(input_frame, font=('Segoe UI', 12), width=25, values=['Introductory', 'Standard', 'Pass Plus', 'Driving Test'])
+        self.pay_rate_label = tk.Label(input_frame, text="0", font=('Segoe UI', 12), bg=colors['input_bg'], fg=colors['text_dark'])
+        self.lesson_date = DateEntry(input_frame, font=('Segoe UI', 12), width=25, date_pattern='yyyy-mm-dd')
         self.lesson_duration = tk.Entry(input_frame, font=('Segoe UI', 12), width=25)
-        self.total_fee_label = tk.Label(input_frame, text="0", font=('Segoe UI', 12),
-                                    bg=colors['input_bg'], fg=colors['text_dark'])
+        self.total_fee_label = tk.Label(input_frame, text="0", font=('Segoe UI', 12), bg=colors['input_bg'], fg=colors['text_dark'])
 
-        # Bind events
         self.lesson_type.bind("<<ComboboxSelected>>", self.update_pay_rate)
         self.lesson_duration.bind("<KeyRelease>", self.calculate_total_fee)
 
-        # Input fields configuration
         input_fields = [
             ("Select Student:", self.student_select),
             ("Select Instructor:", self.instructor_select),
@@ -1144,26 +1130,101 @@ class DrivingSchoolApp:
             label.grid(row=i, column=0, padx=(5,10), pady=3, sticky="e")
             widget.grid(row=i, column=1, padx=(0,5), pady=3, sticky="w")
 
-        # Button frame
+        # Button frame with proper positioning
         button_frame = tk.Frame(main_frame, bg=colors['background'])
         button_frame.pack(pady=10, fill='x')
 
-        # Styled buttons
-        view_btn = ttk.Button(
-            button_frame,
-            text="View Lessons",
-            command=self.view_lessons,
-            style='Search.TButton'
-        )
+        # Left-aligned buttons
+        view_btn = ttk.Button(button_frame, text="View Lessons", command=self.view_lessons, style='Search.TButton')
         view_btn.pack(side='left', padx=5)
 
-        book_btn = ttk.Button(
-            button_frame,
-            text="Book Lesson",
-            command=self.book_lesson,
-            style='Add.TButton'
-        )
+        book_btn = ttk.Button(button_frame, text="Book Lesson", command=self.book_lesson, style='Add.TButton')
         book_btn.pack(side='left', padx=5)
+
+        # Right-aligned delete button
+        delete_btn = ttk.Button(button_frame, text="Delete Lesson", command=self.delete_lesson, style='Reset.TButton')
+        delete_btn.pack(side='right', padx=5)
+
+        # TreeView Section
+        tree_frame = tk.Frame(main_frame, bg='white', bd=1, relief='solid')
+        tree_frame.pack(pady=10, fill="both", expand=True)
+
+        vertical_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical")
+        vertical_scrollbar.pack(side="right", fill="y")
+
+        # TreeView Configuration
+        self.lesson_tree = ttk.Treeview(
+            tree_frame,
+            columns=('Student', 'Instructor', 'Type', 'Date', 'Duration', 'Fee', 'Status'),
+            show="headings",
+            yscrollcommand=vertical_scrollbar.set
+        )
+        self.lesson_tree.pack(fill="both", expand=True)
+
+        column_configs = {
+            'Student': {'width': 120, 'anchor': 'center'},
+            'Instructor': {'width': 120, 'anchor': 'center'},
+            'Type': {'width': 100, 'anchor': 'center'},
+            'Date': {'width': 100, 'anchor': 'center'},
+            'Duration': {'width': 70, 'anchor': 'center'},
+            'Fee': {'width': 70, 'anchor': 'center'},
+            'Status': {'width': 80, 'anchor': 'center'}
+        }
+
+        for col, config in column_configs.items():
+            self.lesson_tree.heading(col, text=col)
+            self.lesson_tree.column(col, **config)
+
+        vertical_scrollbar.config(command=self.lesson_tree.yview)
+
+        # Initial data load
+        self.populate_student_dropdown()
+        self.populate_instructor_dropdown()
+        self.view_lessons()
+
+    # Add these methods to the DrivingSchoolApp class
+
+    def delete_lesson(self):
+        selected_item = self.lesson_tree.selection()
+        if not selected_item:
+            messagebox.showerror("Error", "Please select a lesson to delete")
+            return
+
+        if not messagebox.askyesno("Confirm", "Are you sure you want to delete this lesson?"):
+            return
+
+        try:
+            # Get the values from the selected row
+            row_values = self.lesson_tree.item(selected_item)['values']
+            
+            # Get student and instructor IDs from names
+            student_name = row_values[0]
+            instructor_name = row_values[1]
+            lesson_date = row_values[3]
+            
+            # Find the lesson ID using the information from the selected row
+            self.cursor.execute("""
+                SELECT l.id FROM lessons l
+                JOIN students s ON l.student_id = s.id
+                JOIN instructors i ON l.instructor_id = i.id
+                WHERE s.first_name || ' ' || s.last_name = ?
+                AND i.first_name || ' ' || i.last_name = ?
+                AND l.lesson_date = ?
+            """, (student_name, instructor_name, lesson_date))
+            
+            lesson_id = self.cursor.fetchone()
+            
+            if lesson_id:
+                # Delete the lesson
+                self.cursor.execute("DELETE FROM lessons WHERE id = ?", (lesson_id[0],))
+                self.conn.commit()
+                messagebox.showinfo("Success", "Lesson deleted successfully")
+                self.view_lessons()  # Refresh the view
+            else:
+                messagebox.showerror("Error", "Lesson not found in database")
+                
+        except sqlite3.Error as e:
+            messagebox.showerror("Database Error", f"Error deleting lesson: {str(e)}")
 
         # TreeView Section with improved styling
         tree_frame = tk.Frame(main_frame, bg='white', bd=1, relief='solid')
@@ -1247,6 +1308,11 @@ class DrivingSchoolApp:
             self.show_error("Please enter a valid duration")
             return
             
+        # Validate duration (must not exceed 10 hours)
+        if duration > 10:
+            self.show_error("Duration cannot exceed 10 hours")
+            return
+
         status = 'Booked'
         
         # Calculate total fee
@@ -1254,6 +1320,12 @@ class DrivingSchoolApp:
         
         if total_fee == 0:
             self.show_error("Invalid fee calculation")
+            return
+
+        # Validate the lesson date
+        today = date.today()
+        if lesson_date < today:
+            self.show_error("Cannot book a lesson for a past date")
             return
 
         # Fetch IDs for student and instructor based on names
@@ -1430,7 +1502,7 @@ def show_loading_screen(root):
         return loading
 
 
-
+ 
 def main():
     root = tk.Tk()
     app = DrivingSchoolApp(root)
